@@ -1,0 +1,34 @@
+{
+  "id": "subdm-ia-assistant",
+  "title": "Assistente de IA Local",
+  "description": "Gera NPCs usando IA local.",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": 12,
+    "verified": 13
+  },
+  "author": "Rafael",
+  "license": "MIT",
+  "scripts": [
+    "scripts/init.js",
+    "scripts/utils.js",
+    "scripts/npc.js",
+    "scripts/ai.js"
+  ],
+  "packs": [
+    {
+      "name": "npcs-examples",
+      "label": "NPCs de Exemplo",
+      "path": "packs/npcs-examples",
+      "type": "Actor",
+      "private": false
+    },
+    {
+      "name": "items-templates",
+      "label": "Itens de Template",
+      "path": "packs/items-templates",
+      "type": "Item",
+      "private": false
+    }
+  ]
+}
