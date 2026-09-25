@@ -1,11 +1,9 @@
-// ===============================
 Hooks.once("init", () => {
-    console.log("🟢 IA NPC BLINDADA inicializada!");
+    console.log("subdm-ia-assistant | Módulo inicializado");
 
-    // Register settings early so they are available to all module code
     game.settings.register("subdm-ia-assistant", "aiEndpoint", {
         name: "AI Endpoint",
-        hint: "URL do endpoint da IA local (ex: http://localhost:11434/v1/chat/completions)",
+        hint: "URL do endpoint compatível com OpenAI (ex: http://localhost:11434/v1/chat/completions)",
         scope: "world",
         config: true,
         type: String,
@@ -14,11 +12,33 @@ Hooks.once("init", () => {
 
     game.settings.register("subdm-ia-assistant", "aiModel", {
         name: "Modelo da IA",
-        hint: "Nome do modelo a usar (ex: llama3.1)",
+        hint: "Nome exato do modelo no Ollama (confira com 'ollama list')",
         scope: "world",
         config: true,
         type: String,
-        default: "llama3.1"
+        default: "qwen2.5-coder:14b"
+    });
+
+    game.settings.register("subdm-ia-assistant", "aiTemperature", {
+        name: "Temperatura da IA",
+        hint: "Mais baixo = mais aderente ao formato JSON. Recomendado 0.3–0.5 para modelos pequenos.",
+        scope: "world",
+        config: true,
+        type: Number,
+        default: 0.4
+    });
+
+    game.settings.register("subdm-ia-assistant", "regrasSRD", {
+        name: "Regras SRD de referência",
+        hint: "Compêndios do dnd5e usados para validar magias e calibrar estatísticas.",
+        scope: "world",
+        config: true,
+        type: String,
+        choices: {
+            "2014": "SRD 5.1 (D&D 5e 2014)",
+            "2024": "SRD 5.2 (D&D 5e 2024)"
+        },
+        default: "2014"
     });
 
     game.settings.register("subdm-ia-assistant", "systemPrompt", {
@@ -27,58 +47,81 @@ Hooks.once("init", () => {
         scope: "world",
         config: true,
         type: String,
-        default: `Crie um NPC para D&D 5e baseado na descrição do usuário. Responda APENAS com JSON válido no seguinte formato:
+        default: `Você é um gerador de NPCs para D&D 5e. Responda SEMPRE apenas com um objeto JSON válido, sem markdown, sem texto fora do JSON.
+
+Exemplo de saída válida:
 {
-  "nome": "Nome do NPC",
-  "raca": "Raca (ex: humano)",
-  "alinhamento": "Alinhamento (ex: neutral)",
-  "hp": 50,
-  "ac": 15,
-  "for": 14,
-  "des": 12,
-  "con": 16,
-  "int": 10,
-  "sab": 13,
-  "car": 11,
+  "nome": "Grokk, o Cortador",
+  "raca": "orc",
+  "tipo": "humanoide",
+  "alinhamento": "caótico mau",
+  "hp": 27,
+  "ac": 13,
+  "for": 16, "des": 12, "con": 14, "int": 8, "sab": 10, "car": 9,
   "ataques": [
-    {
-      "nome": "Ataque Básico",
-      "dano": "1d8+3",
-      "tipo": "slashing",
-      "descricao": "Descrição do ataque"
-    }
+  { "nome": "Machado Grande", "dano": "1d12+3", "tipo": "slashing", "descricao": "Ataque corpo a corpo com machado." }
+  ],
+  "magias": [
+  { "nome": "Light", "nivel": 0, "descricao": "Faz um objeto emitir luz." }
   ],
   "habilidades": [
-    {
-      "nome": "Habilidade Especial",
-      "descricao": "Descrição da habilidade"
-    }
+  { "nome": "Fúria Orc", "descricao": "Vantagem em ataques quando com pouca vida." }
   ]
 }
-Nunca deixe campos vazios. Use valores numéricos para atributos e HP/AC.`
+
+Regras estritas:
+- Todos os números devem ser números JSON, nunca strings.
+- "magias" deve ser [] se o NPC não conjura magias.
+- Nomes de magias devem ser os nomes oficiais em inglês do SRD, escolhidos da lista fornecida.
+- Use as referências do SRD fornecidas para manter HP, CA, atributos e dano fiéis ao CR pedido.
+- Não invente campos além dos mostrados no exemplo.
+- Não escreva nada fora do objeto JSON.`
     });
 });
 
-// ===============================
+// v12 passa jQuery nos hooks de render, v13/ApplicationV2 passa HTMLElement
+function elementoRaiz(html) {
+    return html instanceof HTMLElement ? html : html?.[0];
+}
+
+// Botão no diretório de atores
 Hooks.on("renderActorDirectory", (app, html) => {
+    const header = elementoRaiz(html)?.querySelector(".directory-header");
+    if (!header || header.querySelector(".ia-gerar-npc-btn")) return; // evita duplicar
+
     const btn = document.createElement("button");
-    btn.innerText = "Gerar NPC IA";
+    btn.type = "button";
+    btn.className = "ia-gerar-npc-btn";
+    btn.innerText = "🤖 Gerar NPC IA";
 
     btn.onclick = async () => {
-        console.log("🟡 Botão clicado");
-        const prompt = await pedirDescricaoNPC();
-        if (prompt) gerarNPC(prompt);
+        if (btn.disabled) return; // trava contra clique duplo
+        btn.disabled = true;
+        const textoOriginal = btn.innerText;
+
+        try {
+            const params = await pedirParametrosNPC();
+            if (!params) return; // usuário cancelou
+
+            btn.innerText = "Gerando...";
+            await gerarNPC(params);
+        } finally {
+            btn.disabled = false;
+            btn.innerText = textoOriginal;
+        }
     };
 
-    html.querySelector(".directory-header")?.appendChild(btn);
+    header.appendChild(btn);
 });
 
-// ===============================
-Hooks.on("renderActorSheet", (app, html) => {
-    const actor = app.actor;
-    if (actor.type !== "npc") return;
+// Botões na ficha do NPC (escalonar + regenerar ataques/magias)
+function adicionarBotoesFichaNPC(app, html) {
+    const actor = app.actor ?? app.document;
+    if (actor?.type !== "npc") return;
 
-    if (html[0].querySelector(".ia-btns")) return;
+    const raiz = elementoRaiz(html) ?? app.element;
+    const sheetHeader = raiz?.querySelector(".sheet-header") ?? raiz?.querySelector(".window-content");
+    if (!sheetHeader || sheetHeader.querySelector(".ia-btns")) return; // evita duplicar
 
     const container = document.createElement("div");
     container.className = "ia-btns";
@@ -87,12 +130,48 @@ Hooks.on("renderActorSheet", (app, html) => {
     container.style.margin = "5px";
 
     const btnScale = document.createElement("button");
-    btnScale.innerText = "Escalonar IA";
-    btnScale.onclick = () => escalarNPC(actor);
+    btnScale.type = "button";
+    btnScale.innerText = "⚖️ Escalonar IA";
+    btnScale.onclick = async () => {
+        if (btnScale.disabled) return;
+        btnScale.disabled = true;
+        try {
+            const relacao = await pedirOpcoesEscalonamento(actor);
+            if (relacao) await escalarNPC(actor, relacao);
+        } finally {
+            btnScale.disabled = false;
+        }
+    };
+
+    const btnRegen = document.createElement("button");
+    btnRegen.type = "button";
+    btnRegen.innerText = "🔄 Regenerar Ataques/Magias";
+    btnRegen.onclick = async () => {
+        if (btnRegen.disabled) return; // trava contra clique duplo
+        btnRegen.disabled = true;
+        const textoOriginal = btnRegen.innerText;
+
+        try {
+            const opcoes = await pedirOpcoesRegeneracao(actor);
+            if (!opcoes) return;
+            if (!opcoes.regenerarAtaques && !opcoes.regenerarMagias) {
+                ui.notifications.warn("Selecione ao menos ataques ou magias para regenerar.");
+                return;
+            }
+
+            btnRegen.innerText = "Gerando...";
+            await regenerarAtaquesEMagias(actor, opcoes); // já notifica sucesso/erro
+        } finally {
+            btnRegen.disabled = false;
+            btnRegen.innerText = textoOriginal;
+        }
+    };
 
     container.appendChild(btnScale);
-    container.appendChild(btnLegend);
-    container.appendChild(btnDialogue);
+    container.appendChild(btnRegen);
+    sheetHeader.appendChild(container);
+}
 
-    html[0].querySelector(".sheet-header")?.appendChild(container);
-});
+// fichas antigas (ApplicationV1) e fichas do dnd5e 5.x (ApplicationV2)
+Hooks.on("renderActorSheet", adicionarBotoesFichaNPC);
+Hooks.on("renderActorSheetV2", adicionarBotoesFichaNPC);

@@ -13,6 +13,7 @@
     "scripts/init.js",
     "scripts/utils.js",
     "scripts/npc.js",
+    "scripts/srd.js",
     "scripts/ai.js"
   ],
   "packs": [
